@@ -88,11 +88,6 @@ public class CurvedTextView: UIView {
         set { internalBounds = newValue }
     }
     
-    override public var intrinsicContentSize: CGSize {
-        let size = super.intrinsicContentSize
-        return CGSize(width: (width > 0) ? width : size.width, height: (height > 0) ? height : size.height)
-    }
-    
     public init() {
         super.init(frame: .zero)
         self.backgroundColor = .clear
@@ -118,17 +113,15 @@ public class CurvedTextView: UIView {
     override public func draw(_ rect: CGRect)  {
         guard let context = UIGraphicsGetCurrentContext() else { return }
         
-        let offset = (font.pointSize - kern) / 3.5
-        
-        if let backgroundColot = self.backgroundColor {
-            context.setFillColor(backgroundColot.cgColor)
+        if let backgroundColor = self.backgroundColor {
+            context.setFillColor(backgroundColor.cgColor)
             context.fill(rect)
         }
         
         let newTextSize = newSize()
         
         context.scaleBy(x: 1, y: -1)
-        context.translateBy(x: offset - newTextSize.minPoint.x , y: newTextSize.minPoint.y)
+        context.translateBy(x: rect.midX , y: newTextSize.minPoint.y)
         centreArcPerpendicular(context: context)
         
         height = font.pointSize + newTextSize.maxPoint.y - newTextSize.minPoint.y
