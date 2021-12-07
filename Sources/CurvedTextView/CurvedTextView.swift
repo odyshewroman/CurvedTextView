@@ -68,6 +68,25 @@ public class CurvedTextView: UIView {
         }
     }
     
+    private var radianRotateCharactersAngle: CGFloat = 0
+    
+    /// The angle of characters rotation.
+    public var rotateCharactersAngle: Int = 90 {
+        willSet {
+            if newValue > 360 {
+                self.rotateCharactersAngle = newValue % 360
+                return
+            }
+            
+            if newValue < 0 {
+                self.rotateCharactersAngle = 360 + newValue % 360
+                return
+            }
+            
+            self.radianRotateCharactersAngle = CGFloat(Double(newValue) * Double.pi / 180)
+        }
+    }
+    
     /// The color of the displayed text.
     public var textColor: UIColor = .clear
     
@@ -267,7 +286,7 @@ extension CurvedTextView {
         // Move the origin to the centre of the text (negating the y-axis manually)
         context.translateBy(x: curveRadius * cos(theta), y: -(curveRadius * sin(theta)))
         // Rotate the coordinate system
-        context.rotate(by: -slantAngle)
+        context.rotate(by: radianRotateCharactersAngle - slantAngle)
         // Calculate the width of the text
         let offset = text.size(withAttributes: attributes)
         // Move the origin by half the size of the text
