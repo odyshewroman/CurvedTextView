@@ -45,3 +45,11 @@ pod "CurvedTextView"
 ## Ussage
 
 <img src="/assets/usages_example.png">
+
+If set circle position to 270 degrees, the text will be flipped.
+
+<img src="/assets/flippedText.png">
+
+To avoid this, set the negative radius and circle position to 90 degrees. 
+
+<img src="/assets/rightText.png">
