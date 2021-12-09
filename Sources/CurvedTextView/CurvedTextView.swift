@@ -15,12 +15,19 @@ public class CurvedTextView: UIView {
     private var width: CGFloat = 0
     
     private var internalBounds: CGRect = .zero
+    private var charArc: [(character: String, arc: CGFloat)] = []
+    private var baseThetaI: CGFloat = 0
+    
+    private var attributes: [NSAttributedString.Key : Any] {
+        return [NSAttributedString.Key.font: font, .kern: kern] as [NSAttributedString.Key : Any]
+    }
     
     /// The kerning of the text.
     public var kern: CGFloat = 0 {
         didSet {
             if oldValue != kern {
                 calcBounds()
+                setNeedsDisplay()
             }
         }
     }
@@ -35,27 +42,25 @@ public class CurvedTextView: UIView {
         didSet {
             if oldValue != curveRadius {
                 calcBounds()
+                setNeedsDisplay()
             }
         }
     }
     
-    /// Position on circle, from 0 to 360 degrees. 0 mean right circle point, 90 - top, 180 left, 360 bottom.
+    /// Position on circle, from 0 to 360 degrees. 0 mean right circle point, 90 - top, 180 left, 270 bottom.
     public var circlePosition: Int = 90 {
         willSet {
             if newValue > 360 {
                 self.circlePosition = newValue % 360
-                return
             }
             
             if newValue < 0 {
                 self.circlePosition = 360 + newValue % 360
-                return
             }
             
             self.radianCirclePosition = CGFloat(Double(newValue) * Double.pi / 180)
-            if newValue != self.circlePosition {
-                calcBounds()
-            }
+            calcBounds()
+            setNeedsDisplay()
         }
     }
     
@@ -64,26 +69,8 @@ public class CurvedTextView: UIView {
         didSet {
             if oldValue != text {
                 calcBounds()
+                setNeedsDisplay()
             }
-        }
-    }
-    
-    private var radianRotateCharactersAngle: CGFloat = 0
-    
-    /// The angle of characters rotation.
-    public var rotateCharactersAngle: Int = 90 {
-        willSet {
-            if newValue > 360 {
-                self.rotateCharactersAngle = newValue % 360
-                return
-            }
-            
-            if newValue < 0 {
-                self.rotateCharactersAngle = 360 + newValue % 360
-                return
-            }
-            
-            self.radianRotateCharactersAngle = CGFloat(Double(newValue) * Double.pi / 180)
         }
     }
     
@@ -95,12 +82,27 @@ public class CurvedTextView: UIView {
         didSet {
             if oldValue != font {
                 calcBounds()
+                setNeedsDisplay()
             }
         }
     }
+   
+    /// Additional horizontal offset between text and view bounds.
+    ///
+    ///
+    /// On combinations of some specific circle position and kern, text can be a bit shifted outside of bounds
+    /// use this property to manually shift text inside bounds on the horizontal side.
+    public var xTextBoundsOffset: CGFloat = 0 { didSet { setNeedsDisplay() } }
+    
+    /// Additional vertical offset between text and view bounds.
+    ///
+    ///
+    /// On combinations of some specific circle position and kern, text can be a bit shifted outside of bounds
+    /// use this property to manually shift text inside bounds on the vertical side.
+    public var yTextBoundsOffset: CGFloat = 0 { didSet { setNeedsDisplay() } }
     
     /// The direction of the text.
-    public var textDirection: Direction = .clockwise
+    public var textDirection: Direction = .clockwise { didSet { setNeedsDisplay() } }
     
     override public var bounds: CGRect {
         get { return internalBounds }
@@ -125,7 +127,7 @@ public class CurvedTextView: UIView {
         }
         
         let size = newSize()
-        internalBounds = CGRect(x: 0, y: 0, width: font.pointSize + size.maxPoint.x - size.minPoint.x, height: font.pointSize + size.maxPoint.y - size.minPoint.y)
+        internalBounds = CGRect(x: 0, y: 0, width: kern + font.pointSize + size.maxPoint.x - size.minPoint.x, height: kern + font.pointSize + size.maxPoint.y - size.minPoint.y)
         self.frame = internalBounds
     }
     
@@ -137,14 +139,17 @@ public class CurvedTextView: UIView {
             context.fill(rect)
         }
         
+        precalculate()
+        
         let newTextSize = newSize()
+        let newCoordinates = calculateMinCoordinates()
         
         context.scaleBy(x: 1, y: -1)
-        context.translateBy(x: rect.midX , y: newTextSize.minPoint.y)
+        context.translateBy(x: -(newCoordinates.x + newTextSize.minPoint.x), y: newTextSize.minPoint.y)
         centreArcPerpendicular(context: context)
         
-        height = font.pointSize + newTextSize.maxPoint.y - newTextSize.minPoint.y
-        width = font.pointSize + newTextSize.maxPoint.x - newTextSize.minPoint.x
+        height = kern + font.pointSize + newTextSize.maxPoint.y - newTextSize.minPoint.y
+        width = kern + font.pointSize + newTextSize.maxPoint.x - newTextSize.minPoint.x
         
         if rect.height != height || rect.width != width {
             internalBounds = CGRect(x: 0, y: 0, width: width, height: height)
@@ -155,54 +160,31 @@ public class CurvedTextView: UIView {
 }
 
 extension CurvedTextView {
-    private func centreArcPerpendicular(context: CGContext) {
-        
-        // *******************************************************
-        // This draws the String str around an arc of radius r,
-        // with the text centred at polar angle theta
-        // *******************************************************
-        
-        let characters: [String] = text.map { String($0) } // An array of single character strings, each character in str
-        let attributes = [NSAttributedString.Key.font: font, .kern: kern] as [NSAttributedString.Key : Any]
-        
-        // This will be the arcs subtended by each character
-        var charArc: [(character: String, arc: CGFloat)] = []
-        var totalArc: CGFloat = 0 // ... and the total arc subtended by the string
-        
-        // Calculate the arc subtended by each letter and their total
-        characters.forEach {
-            let arc = chordToArc($0.size(withAttributes: attributes).width)
-            charArc.append(($0, arc: arc))
-            totalArc += arc
-        }
-        
-        // Are we writing clockwise (right way up at 12 o'clock, upside down at 6 o'clock)
-        // or anti-clockwise (right way up at 6 o'clock)?
-        let direction: CGFloat = textDirection.rawValue
+    private func calculateMinCoordinates() -> CGPoint {
+        var thetaI = baseThetaI
+        var minPoint = CGPoint(x: CGFloat.greatestFiniteMagnitude, y: CGFloat.greatestFiniteMagnitude)
         let slantCorrection: CGFloat = -.pi / 2
         
-        // The centre of the first character will then be at
-        // thetaI = theta - totalArc / 2 + arcs[0] / 2
-        // But we add the last term inside the loop
-        var thetaI = radianCirclePosition - direction * totalArc / 2
-        
-        // let offset = getOffset(charArc: charArc, thetaI: thetaI, direction: direction, font)
-        charArc.forEach {
-            // Call centerText with each character in turn.
-            // Remember to add +/-90º to the slantAngle otherwise
-            // the characters will "stack" round the arc rather than "text flow"
-            thetaI += direction * $0.arc / 2
-            centre($0.character, context: context, angle: thetaI, slantAngle: thetaI + slantCorrection)
-            // The centre of the next character will then be at
-            // thetaI = thetaI + arcs[i] / 2 + arcs[i + 1] / 2
-            // but again we leave the last term to the start of the next loop...
-            thetaI += direction * $0.arc / 2
+        for char in charArc {
+            thetaI += textDirection.rawValue * char.arc / 2
+            let offset = char.character.size(withAttributes: attributes)
+
+            let rotatedCoordinates = rotateRectangleCoordinates(offset, -(thetaI + slantCorrection))
+            
+            let minCoordinate = minCoordinate(rotatedCoordinates)
+            if minCoordinate.x < minPoint.x {
+                minPoint.x = minCoordinate.x
+            }
+            
+            if minCoordinate.y < minPoint.y {
+                minPoint.y = minCoordinate.y
+            }
         }
+    
+        return minPoint
     }
     
     private func newSize() -> (minPoint: CGPoint, maxPoint: CGPoint) {
-        let attributes = [NSAttributedString.Key.font: font, .kern: kern] as [NSAttributedString.Key : Any]
-        
         var charArc: [(characterSize: CGSize, arc: CGFloat)] = []
         var totalArc: CGFloat = 0
         
@@ -252,6 +234,102 @@ extension CurvedTextView {
         return (minPoint: CGPoint(x: minX, y: minY), maxPoint: CGPoint(x: maxX, y: maxY))
     }
     
+    private func minCoordinate(_ points: [CGPoint]) -> CGPoint {
+        var minPoint = CGPoint(x: CGFloat.greatestFiniteMagnitude, y: CGFloat.greatestFiniteMagnitude)
+        
+        for point in points {
+            if point.x < minPoint.x {
+                minPoint.x = point.x
+            }
+            
+            if point.y < minPoint.y {
+                minPoint.y = point.y
+            }
+        }
+        
+        return minPoint
+    }
+    
+    // center - rectangele center
+    // size - rectangle size
+    private func rotateRectangleCoordinates(_ size: CGSize, _ angle: CGFloat) -> [CGPoint] {
+        // for bottom right corner
+        // new x = center x + w/2 * Cos(rotate angle) - h/2 * Sin(rotate angle)
+        // new y = center y + w/2 * Sin(rotate angle) + h/2 * Cos(rotate angle)
+        
+        // center x == w/2
+        // center y == h/2
+        
+        let halfWidth = size.width / 2
+        let halfHeight = size.height / 2
+        
+        let cosAngle = cos(angle)
+        let sinAngle = sin(angle)
+        
+        let topRightPoint: CGPoint = CGPoint(x: halfWidth * (1 + cosAngle) + halfHeight * sinAngle,
+                                      y: halfHeight * (1 - cosAngle) + halfWidth * sinAngle)
+        
+        let bottomRightPoint: CGPoint = CGPoint(x: halfWidth * (1 + cosAngle) - halfHeight * sinAngle,
+                                      y: halfHeight * (1 + cosAngle) + halfWidth * sinAngle)
+        
+        let bottomLeftPoint: CGPoint = CGPoint(x: halfWidth * (1 - cosAngle) - halfHeight * sinAngle,
+                                      y: halfHeight * (1 + cosAngle) - halfWidth * sinAngle)
+        
+        let topLeftPoint: CGPoint = CGPoint(x: halfWidth * (1 - cosAngle) + halfHeight * sinAngle,
+                                      y: halfHeight * (1 - cosAngle) - halfWidth * sinAngle)
+        
+        return [topRightPoint, bottomRightPoint, bottomLeftPoint, topLeftPoint]
+    }
+    
+    private func precalculate() {
+        let characters: [String] = text.map { String($0) }
+        var totalArc: CGFloat = 0 // the total arc subtended by the string
+        
+        // This will be the arcs subtended by each character
+        charArc.removeAll()
+        
+        // Calculate the arc subtended by each letter and their total
+        characters.forEach {
+            let arc = chordToArc($0.size(withAttributes: attributes).width)
+            charArc.append(($0, arc: arc))
+            totalArc += arc
+        }
+        
+        baseThetaI = radianCirclePosition - textDirection.rawValue * totalArc / 2
+    }
+    
+    private func centreArcPerpendicular(context: CGContext) {
+        
+        // *******************************************************
+        // This draws the String str around an arc of radius r,
+        // with the text centred at polar angle theta
+        // *******************************************************
+        
+
+        // Are we writing clockwise (right way up at 12 o'clock, upside down at 6 o'clock)
+        // or anti-clockwise (right way up at 6 o'clock)?
+        let direction: CGFloat = textDirection.rawValue
+        let slantCorrection: CGFloat = -.pi / 2
+        
+        // The centre of the first character will then be at
+        // thetaI = theta - totalArc / 2 + arcs[0] / 2
+        // But we add the last term inside the loop
+        var thetaI = baseThetaI
+        
+        // let offset = getOffset(charArc: charArc, thetaI: thetaI, direction: direction, font)
+        charArc.forEach {
+            // Call centerText with each character in turn.
+            // Remember to add +/-90º to the slantAngle otherwise
+            // the characters will "stack" round the arc rather than "text flow"
+            thetaI += direction * $0.arc / 2
+            centre($0.character, context: context, angle: thetaI, slantAngle: thetaI + slantCorrection)
+            // The centre of the next character will then be at
+            // thetaI = thetaI + arcs[i] / 2 + arcs[i + 1] / 2
+            // but again we leave the last term to the start of the next loop...
+            thetaI += direction * $0.arc / 2
+        }
+    }
+    
     private func chordToArc(_ chord: CGFloat) -> CGFloat {
         var val = chord / (2 * curveRadius)
         
@@ -286,7 +364,7 @@ extension CurvedTextView {
         // Move the origin to the centre of the text (negating the y-axis manually)
         context.translateBy(x: curveRadius * cos(theta), y: -(curveRadius * sin(theta)))
         // Rotate the coordinate system
-        context.rotate(by: radianRotateCharactersAngle - slantAngle)
+        context.rotate(by: -slantAngle)
         // Calculate the width of the text
         let offset = text.size(withAttributes: attributes)
         // Move the origin by half the size of the text
@@ -294,6 +372,7 @@ extension CurvedTextView {
         
         // Draw the text
         text.draw(at: CGPoint(x: 0, y: 0), withAttributes: attributes)
+        
         // Restore the context
         context.restoreGState()
     }
