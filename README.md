@@ -11,7 +11,7 @@ This work is licensed under a
 
 # CurvedTextView
 
-CurvedTextView it is UIKit based UI element for drawing curved text. This realisztio based on this [stackowerflow comment](https://stackoverflow.com/a/32785652) 
+CurvedTextView it is UIKit based UI element for drawing curved text. This realisation based on this [stackowerflow comment](https://stackoverflow.com/a/32785652) 
 
 
 <p align="center">
